@@ -1,91 +1,85 @@
-clear; close all; clc;
+clear; close all;
+%Coordinate definition: xyz orthoganal, inertial. Orbit plane is x-y plane
+%Assumed that deployment begins when spacecraft is on the positive y-axis,
+%   and the spacecraft moves counterclockwise in the x-y plane
 global dt;
 global G;
+global Re;
 global mu;
 global m_sat;
 global m_pico;
 global m_e;
-global r1_orbit;                %initial orbital height of main body
-global r2_orbit;                %initial orbital height of picosat
-global w1;                      %initial orbital angular velocity of main body
-global w2;                      %initial orbital angular velocity of picosat
-global T_orbit;
 global E;
 global tether_A;
-dt = 0.03;
-%spacecraft and environment specs
+dt = 0.2;
+%known parameters
 m_sat = 1;                      %kg main body mass
-m_pico = 0.1;                   %kg picosat mass
-G = 6.67408*10^-11;             %m^3 kg^-1 s^-2 gravitational constant
-m_e = 5.972*10^24;              %kg mass of earth
+m_pico = 0.270;                   %kg picosat mass
+Re = 6378e3;                    %m earth radius
+G = 6.67408e-11;                %m^3 kg^-1 s^-2 gravitational constant
+m_e = 5.972e24;                 %kg mass of earth
 mu = G*m_e;                     %m^3 s^-2 reduced mass
-E = 124 * 10^9;                 %Tether modulus (Pa)
-tether_A = pi*(1*10^-4/2)^2;    %Tether cross sectional area (m^2)
-l_0 = 10;                        %initial tether length (assumed deployed in the nadir direction)
+E = 117e9;                      %Tether modulus (Pa)
+tether_A = pi*(1e-3/2)^2;    %Tether cross sectional area (m^2)
+l_0 = 0.1;                        %initial tether length (assumed deployed in the nadir direction)
+ldot = 1;                       %m/s tether release rate
+%Inital conditions
+r1_init = [0; Re+350e3; 0];     %Main body orbit at 350 km altitude
+r2_init = [0; Re+350e3-l_0; 0];     %picosat orbit at at 350 km altitude (attached to main body)
+w1_init = [0; 0; sqrt(mu/norm(r1_init)^3)];
+w2_init = [0; 0; sqrt(mu/norm(r2_init)^3)];
+r1dot_init = cross(w1_init, r1_init);
+r2dot_init = [0; -ldot; 0] + cross(w2_init, r2_init);
+r1ddot_init = -mu.*r1_init./norm(r1_init)^3;
+r2ddot_init = -mu.*r2_init./norm(r2_init)^3;
 
-%orbit specs
-r1_orbit = (6378 + 350)*1000;           %initial orbit radius of main body
-w1 = [0; -sqrt(mu/(r1_orbit^3)); 0];    %orbit angular velocity (rad/s)
-T_orbit = 2*pi/-w1(2);                  %orbit period (s)
-r2_orbit = r1_orbit - l_0;              %initial orbital radius of end body
-w2 = [0; -sqrt(mu/(r2_orbit^3)); 0];    %orbital angular velocity
-
-%Initial conditions in the orbit frame
-r1 = [0;0;r1_orbit];               %initially same in inertial frame
-r2 = [0;0;r2_orbit];                  %subtract initial tether length
-T1 = 0.2 * r1./norm(r1);             %initial spring force (N)
-T2 = -T1;
-r1dot = [w1(2)*r1_orbit;0;0];                  %different in inertial frame
-r2dot = [w2(2)*r2_orbit;0;0];
-r1ddot = [0;0;0];
-r2ddot = [0;0;0];
-ldot = norm(T1)*dt/m_pico;          %impulse imparted on picosat converts to tether kickoff velocity
-
-%convert initial conditions to inertial frame where needed
-r1dotN = r1dot + cross(w,r1);
-r2dotN = r2dot + cross(w,r2);
-r1ddotN = r1ddot + 2.*cross(w,r1dot) + cross(w,cross(w,r1));    %wdot = 0
-r2ddotN = r2ddot + 2.*cross(w,r2dot) + cross(w,cross(w,r2));
-
+T_init = [0; 0; 0];
 
 t = 0;
 k = 1;
 l = l_0;
-while t < 20
-    %compute next state
-    [r1k1, r2k1, r1dotk1, r2dotk1, r1ddotk1, r2ddotk1] = satmotion(r1(:,k),r2(:,k),r1dotN(:,k),r2dotN(:,k),T1(:,k),T2(:,k));
-    
+r1 = r1_init; r2 = r2_init;
+r1dot = r1dot_init; r2dot = r2dot_init;
+r1ddot = r1ddot_init; r2ddot = r2ddot_init;
+T = T_init;
+
+
+while t < 2*pi/norm(w1_init)
+    %predict next state
+    %[r1_pred,r2_pred] = satmotion(r1(:,k),r2(:,k),r1dot(:,k),r2dot(:,k),[0;0;0]);
+
     %compute tether release length
-    lk1 = ldot*dt + l(k); % assume constant tether release speed                
+    lk1 = ldot*dt + l(k);  
+                   
     
-    %compute tension
+    r12 = r1(:,k)-r2(:,k);
+    r12hatk1 = r12./norm(r12);
+    delta = norm(r12) - l(k);
+   
+    %tether carries no compressive strain (slack tether case)
+    if delta < 0
+        delta = 0;
+    end
+   
     
-    rhatk1 = r2k1-r1k1 ./ norm(r2k1-r1k1);      %unit direction vector for tension
-    r12N = r2k1 - r1k1;
-    
-    T1k1 = E*tether_A*(norm(r12N) - l(k))./lk1 .* rhatk1; % get diff in current pos and tether length returns a strain that
-    T2k1 = -T1k1;                                           % we can use to compute the tension
+    T(:,k) = E*tether_A*delta./l(k) .* r12hatk1;
 
-
+    %compute next state
+    [r1k1, r2k1, r1dotk1, r2dotk1] = satmotion(r1(:,k),r2(:,k),r1dot(:,k),r2dot(:,k),T(:,k));
+    
     %update state
     r1(:,k+1) = r1k1;
     r2(:,k+1) = r2k1;
-    r1dotN(:,k+1) = r1dotk1;
-    r2dotN(:,k+1) = r2dotk1;
-    r1ddotN(:,k+1) = r1ddotk1;
-    r2ddotN(:,k+1) = r2ddotk1;
-    T1(:,k+1) = T1k1;
-    T2(:,k+1) = T2k1;
+    r1dot(:,k+1) = r1dotk1;
+    r2dot(:,k+1) = r2dotk1;
     l(k+1) = lk1;
     
     
     t = t+dt;
     k = k+1;
 end
-
-
-
-
+plot(r1(1,:),r1(2,:)); pbaspect([1 1 1]); hold on;
+plot(r2(1,:),r2(2,:)); pbaspect([1 1 1]);
 
 
 
@@ -95,9 +89,9 @@ end
 % of the earth and another net force (denoted T1, T2). To solve for the
 % motion of each body, we integrate the two body problem with the
 % additional T1 T2 force.
-function [r1_out,r2_out,r1dot_out,r2dot_out,r1ddot,r2ddot] = satmotion(r1,r2,r1dot,r2dot,T1,T2)
+function [r1_out,r2_out,r1dot_out,r2dot_out] = satmotion(r1,r2,r1dot,r2dot,T)
 %state equation describing motion of each satellite
-%basically F = ma marching
+%
 %inputs:
 %   r1, r2 are the position vectors of each body in the inertial frame
 %   r1dot, r2dot are the first time derivatives of the position vectors of
@@ -118,8 +112,8 @@ r1hat = r1./norm(r1);
 r2hat = r2./norm(r2);
 
 %F = ma for each body
-r1ddot = -mu./(norm(r1)^2).*r1hat;% + T1./m_sat;    %Testing without T
-r2ddot = -mu./(norm(r2)^2).*r2hat;% + T2./m_pico;
+r1ddot = -mu./(norm(r1)^2).*r1hat - T./m_sat;
+r2ddot = -mu./(norm(r2)^2).*r2hat + T./m_pico;
 
 %integrating rddot to rdot
 r1dot_out = r1dot + r1ddot.*dt;
@@ -128,4 +122,20 @@ r2dot_out = r2dot + r2ddot.*dt;
 %integrating rdot to r
 r1_out = r1 + r1dot_out.*dt;
 r2_out = r2 + r2dot_out.*dt;
+end
+
+%% Two body prediction with no tether
+% currently not in use
+
+function[r1_pred, r2_pred] = predict(r1,r2,ldot)
+global mu;
+global dt;
+w1 = [0; 0; sqrt(mu/norm(r1)^3)];
+w2 = [0; 0; sqrt(mu/norm(r2)^3)];
+
+r1dot = cross(w1, r1);
+r2dot = -ldot.*r2./norm(r2) + cross(w2, r2);
+
+r1_pred = r1 + dt.*r1dot;
+r2_pred = r2 + dt.*r2dot;
 end
